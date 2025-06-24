@@ -13,6 +13,7 @@ if not GEMINI_API_KEY:
     st.stop()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+
 # ── 2) Helper: safe generate with retries/backoff ──────────────────────────────
 def safe_generate(prompt: str, model: str = "gemini-2.5-flash", max_retries: int = 5) -> str:
     backoff = 1.0
