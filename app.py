@@ -5,7 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from google import genai
 
-# ── 1) Init GenAI Client ───────────────────────────────────────────────────────
+# ── 1) Init GenAI Client ──────────────────────────────────────────────────
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
@@ -13,9 +13,9 @@ if not GEMINI_API_KEY:
     st.stop()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ── 2) UI Setup ────────────────────────────────────────────────────────────────
+# ── 2) UI Setup ─────────────────────────────────────────────
 st.set_page_config(page_title="Shopify Import Builder", layout="centered")
-st.title("🛍️ Shopify CSV Builder with Gemini-Enhanced Tags & Descriptions")
+st.title("🍭️ Shopify CSV Builder with Gemini-Enhanced Tags & Descriptions")
 
 # Sidebar: choose one mode
 mode = st.sidebar.radio(
@@ -34,7 +34,7 @@ if not uploaded_file:
     st.info("Awaiting file upload…")
     st.stop()
 
-# ── 3) Load & Preview Raw Data ─────────────────────────────────────────────────
+# ── 3) Load & Preview Raw Data ───────────────────────────────────────
 try:
     df_raw = pd.read_excel(uploaded_file) if uploaded_file.name.lower().endswith(".xlsx") else pd.read_csv(uploaded_file)
     st.success(f"Loaded `{uploaded_file.name}` with {len(df_raw)} rows")
@@ -44,7 +44,7 @@ except Exception as e:
     st.error(f"Could not load file: {e}")
     st.stop()
 
-# ── 4) Define AI helper funcs ──────────────────────────────────────────────────
+# ── 4) Define AI helper funcs ───────────────────────────────────────
 def refine_and_tag(text: str) -> tuple[str, str]:
     prompt = (
         "You are a top-tier Shopify copywriter.\n"
@@ -70,7 +70,7 @@ def tags_only(text: str) -> str:
     resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     return (resp.text or "").strip()
 
-# ── 5) Process trigger ─────────────────────────────────────────────────────────
+# ── 5) Process trigger ───────────────────────────────────────
 if st.button("2) Process Data"):
     df = df_raw.copy()
     n = len(df)
@@ -87,7 +87,7 @@ if st.button("2) Process Data"):
                 first_sent = original.split(".", 1)[0].strip()
                 desc = first_sent
                 tags = tags_only(first_sent)
-            else:  # Full AI mode
+            else:
                 desc, tags = refine_and_tag(original)
 
             custom_descs.append(desc)
@@ -98,10 +98,20 @@ if st.button("2) Process Data"):
     df["custom_description"] = custom_descs
     df["ai_tags"] = all_tags
 
-    # explode, handles, and assemble Shopify schema
-    df["sizes_list"]   = df["size"].fillna("").str.split(r"\s*,\s*")
+    df["sizes_list"] = df["size"].fillna("").str.split(r"\s*,\s*")
     df["colours_list"] = df["colour"].fillna("").str.split(r"\s*,\s*")
     df = df.explode("sizes_list").explode("colours_list")
+
+    # Interactive quantity input
+    st.subheader("🧮 Enter Quantity Per Variant")
+    unique_variants = df[["sizes_list", "colours_list"]].drop_duplicates().values.tolist()
+    variant_qty_map = {}
+    for size, color in unique_variants:
+        key = f"qty_{size}_{color}"
+        qty = st.number_input(f"Quantity for Size: {size}, Color: {color}", min_value=0, value=10, step=1, key=key)
+        variant_qty_map[(str(size).strip(), str(color).strip())] = qty
+
+    df["Variant Inventory Qty"] = df.apply(lambda row: variant_qty_map.get((str(row["sizes_list"]).strip(), str(row["colours_list"]).strip()), 0), axis=1)
 
     df["_base_handle"] = df["title"].str.strip().str.replace(r"\s+","-", regex=True).str.lower()
     serials = {h: str(idx+1).zfill(2) for idx,h in enumerate(df["_base_handle"].unique())}
@@ -109,42 +119,42 @@ if st.button("2) Process Data"):
     df["Handle"] = df["_base_handle"] + "-" + df["_serial"]
 
     out = pd.DataFrame({
-        "Handle":           df["Handle"],
-        "Title":            df["title"],
-        "Body (HTML)":      "<p>" + df["custom_description"] + "</p>",
-        "Vendor":           "YourBrandName",
+        "Handle": df["Handle"],
+        "Title": df["title"],
+        "Body (HTML)": "<p>" + df["custom_description"] + "</p>",
+        "Vendor": "YourBrandName",
         "Product Category": df["product category"].fillna(""),
-        "Type":             df["type"].fillna(""),
-        "Tags":             df["ai_tags"],
-        "Published":        df["published"].astype(str).str.lower().eq("active").map({True:"TRUE",False:"FALSE"}),
-        "Option1 Name":     "",
-        "Option1 Value":    df["sizes_list"],
-        "Option2 Name":     "",
-        "Option2 Value":    df["colours_list"],
-        "Variant SKU":      df["product code"].fillna("") + "-" + df["_serial"]
-                              + "-" + df["sizes_list"] + "-" + df["colours_list"],
-        "Variant Grams":    0,
-        "Variant Inventory Tracker": df["Variant Inventory Tracker"].fillna(""),
-        "Variant Inventory Qty":     df["Variant Inventory Qty"].fillna(0),
-        "Variant Inventory Policy":  df["Variant Inventory Policy"].fillna(""),
+        "Type": df["type"].fillna(""),
+        "Tags": df["ai_tags"],
+        "Published": df["published"].astype(str).str.lower().eq("active").map({True:"TRUE",False:"FALSE"}),
+        "Option1 Name": "Size",
+        "Option1 Value": df["sizes_list"],
+        "Option2 Name": "Color",
+        "Option2 Value": df["colours_list"],
+        "Variant SKU": df["product code"].fillna("") + "-" + df["_serial"] + "-" + df["sizes_list"] + "-" + df["colours_list"],
+        "Variant Grams": 0,
+        "Variant Inventory Tracker": df.get("Variant Inventory Tracker", pd.Series("")).fillna(""),
+        "Variant Inventory Qty": df["Variant Inventory Qty"],
+        "Variant Inventory Policy": df.get("Variant Inventory Policy", pd.Series("")).fillna(""),
         "Variant Fulfillment Service":"manual",
-        "Variant Price":            df["Variant Price"].fillna(0),
-        "Variant Compare At Price": df["Variant Compare At Price"].fillna(0),
+        "Variant Price": df.get("Variant Price", pd.Series(0)).fillna(0),
+        "Variant Compare At Price": df.get("Variant Compare At Price", pd.Series(0)).fillna(0),
         "Variant Requires Shipping":"TRUE",
-        "Variant Taxable":          "TRUE",
-        "Status":                   df["Status"].fillna("")
+        "Variant Taxable": "TRUE",
+        "Status": df.get("Status", pd.Series("")).fillna("")
     })
-
-    first = out.groupby("Handle").cumcount() == 0
-    out.loc[first, "Option1 Name"] = "Size"
-    out.loc[first, "Option2 Name"] = "Color"
 
     st.subheader("📦 Processed Preview (first 10 rows)")
     st.dataframe(out.head(10))
 
     st.download_button(
-        label="3) 📥 Download Shopify CSV",
+        label="3) 📅 Download Shopify CSV",
         data=out.to_csv(index=False).encode("utf-8"),
         file_name="shopify_ready.csv",
         mime="text/csv"
     )
+
+    st.markdown("""
+    ### ℹ️ Quantity Input Format Instructions:
+    You can now directly enter quantities for each size-color variant after upload.
+    """)
