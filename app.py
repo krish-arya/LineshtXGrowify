@@ -7,7 +7,7 @@ from google import genai
 
 # ── 1) Init GenAI Client ──────────────────────────────────────────────────
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 # ── 2) Enhanced UI Setup ─────────────────────────────────────────────
 st.set_page_config(
@@ -235,126 +235,256 @@ st.markdown('<div class="step-header"><h2>🚀 Step 2: Process Your Data</h2></d
 
 process_button = st.button("🔄 Start Processing", type="primary", use_container_width=True)
 
-if process_button:
-    df = df_raw.copy()
-    n = len(df)
+if process_button or 'processed_data' in st.session_state:
     
-    # Processing progress with detailed status
-    progress_container = st.container()
-    with progress_container:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        custom_descs, all_tags = [], []
+    # Only do AI processing if button was clicked (not on rerun)
+    if process_button:
+        df = df_raw.copy()
+        n = len(df)
+        
+        # Processing progress with detailed status
+        progress_container = st.container()
+        with progress_container:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            custom_descs, all_tags = [], []
 
-        with st.spinner("🔮 AI is working its magic..."):
-            for i, (_, row) in enumerate(df.iterrows()):
-                status_text.text(f"Processing product {i+1}/{n}: {row.get('title', 'Unknown')[:30]}...")
-                
-                original = row.get("description", "") or ""
-                if mode == "Default template (no AI)":
-                    desc = f"{row.get('title', '').strip()} - {row.get('product category', '').strip()}"
-                    tags = ""
-                elif mode == "Simple mode (first sentence + tags)":
-                    first_sent = original.split(".", 1)[0].strip()
-                    desc = first_sent
-                    tags = tags_only(first_sent)
-                else:
-                    desc, tags = refine_and_tag(original)
+            with st.spinner("🔮 AI is working its magic..."):
+                for i, (_, row) in enumerate(df.iterrows()):
+                    status_text.text(f"Processing product {i+1}/{n}: {row.get('title', 'Unknown')[:30]}...")
+                    
+                    original = row.get("description", "") or ""
+                    if mode == "Default template (no AI)":
+                        desc = f"{row.get('title', '').strip()} - {row.get('product category', '').strip()}"
+                        tags = ""
+                    elif mode == "Simple mode (first sentence + tags)":
+                        first_sent = original.split(".", 1)[0].strip()
+                        desc = first_sent
+                        tags = tags_only(first_sent)
+                    else:
+                        desc, tags = refine_and_tag(original)
 
-                custom_descs.append(desc)
-                all_tags.append(tags)
-                progress_bar.progress((i + 1) / n)
-                time.sleep(0.1)  # Reduced sleep time
+                    custom_descs.append(desc)
+                    all_tags.append(tags)
+                    progress_bar.progress((i + 1) / n)
+                    time.sleep(0.1)  # Reduced sleep time
 
-        status_text.text("✅ AI processing complete!")
+            status_text.text("✅ AI processing complete!")
 
-    df["custom_description"] = custom_descs
-    df["ai_tags"] = all_tags
+        df["custom_description"] = custom_descs
+        df["ai_tags"] = all_tags
 
-    # Explode variants
-    df["sizes_list"] = df["size"].fillna("").str.split(r"\s*,\s*")
-    df["colours_list"] = df["colour"].fillna("").str.split(r"\s*,\s*")
-    df = df.explode("sizes_list").explode("colours_list")
+        # Explode variants - Fixed approach
+        df_exploded_list = []
+        for _, row in df.iterrows():
+            sizes = [s.strip() for s in str(row.get("size", "")).split(",") if s.strip()]
+            colors = [c.strip() for c in str(row.get("colour", "")).split(",") if c.strip()]
+            
+            # If no sizes or colors, create default entries
+            if not sizes:
+                sizes = [""]
+            if not colors:
+                colors = [""]
+            
+            # Create all combinations
+            for size in sizes:
+                for color in colors:
+                    new_row = row.copy()
+                    new_row["sizes_list"] = size
+                    new_row["colours_list"] = color
+                    df_exploded_list.append(new_row)
+        
+        df = pd.DataFrame(df_exploded_list)
+        
+        # Store processed data in session state
+        st.session_state.processed_data = df
+        st.session_state.variant_quantities = {}
+    else:
+        # Use existing processed data
+        df = st.session_state.processed_data
 
     # ── 8) Interactive Quantity Management ──────────────────────────────
     st.markdown('<div class="step-header"><h2>🧮 Step 3: Set Inventory Quantities</h2></div>', unsafe_allow_html=True)
     
-    # Get unique variants
-    unique_variants = df[["sizes_list", "colours_list"]].drop_duplicates().values.tolist()
-    variant_qty_map = {}
+    # Get unique variants with better handling - only once
+    if 'unique_variants_processed' not in st.session_state:
+        unique_variants = []
+        variant_products = {}
+        
+        for _, row in df.iterrows():
+            size = str(row['sizes_list']).strip()
+            color = str(row['colours_list']).strip()
+            title = str(row['title']).strip()
+            
+            variant_key = (size, color, title)
+            if variant_key not in unique_variants:
+                unique_variants.append(variant_key)
+                variant_products[variant_key] = title
+        
+        st.session_state.unique_variants = unique_variants
+        st.session_state.variant_products = variant_products
+        st.session_state.unique_variants_processed = True
+    else:
+        unique_variants = st.session_state.unique_variants
+        variant_products = st.session_state.variant_products
+    
+    # Initialize quantities if not exists
+    if 'variant_quantities' not in st.session_state:
+        st.session_state.variant_quantities = {}
+        # Pre-populate with defaults
+        for size, color, title in unique_variants:
+            variant_key = f"{size}|{color}|{title}"
+            st.session_state.variant_quantities[variant_key] = default_qty
     
     if bulk_qty_mode:
         st.info(f"📦 Bulk mode enabled: Setting {bulk_qty} for all variants")
-        for size, color in unique_variants:
-            variant_qty_map[(str(size).strip(), str(color).strip())] = bulk_qty
+        # Update all quantities at once
+        for size, color, title in unique_variants:
+            variant_key = f"{size}|{color}|{title}"
+            st.session_state.variant_quantities[variant_key] = bulk_qty
     else:
-        # Group variants by product for better organization
-        products_variants = {}
-        for _, row in df.iterrows():
-            title = row['title']
-            size = str(row['sizes_list']).strip()
-            color = str(row['colours_list']).strip()
-            if title not in products_variants:
-                products_variants[title] = []
-            if (size, color) not in products_variants[title]:
+        # Group variants by product for better organization - cache this too
+        if 'products_variants_grouped' not in st.session_state:
+            products_variants = {}
+            for size, color, title in unique_variants:
+                if title not in products_variants:
+                    products_variants[title] = []
                 products_variants[title].append((size, color))
+            st.session_state.products_variants_grouped = products_variants
+        else:
+            products_variants = st.session_state.products_variants_grouped
+        
+        # Quick bulk update option
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            quick_qty = st.number_input("🚀 Quick Set All", min_value=0, value=default_qty, step=1, key="quick_qty")
+        with col2:
+            if st.button("Apply to All Variants", key="apply_all", use_container_width=True):
+                for size, color, title in unique_variants:
+                    variant_key = f"{size}|{color}|{title}"
+                    st.session_state.variant_quantities[variant_key] = quick_qty
+                st.success(f"✅ Set all variants to {quick_qty}")
+                st.rerun()
+        
+        # Fast input mode - use forms to batch updates
+        st.markdown("### Individual Variant Settings")
         
         # Create expandable sections for each product
         for product_title, variants in products_variants.items():
-            with st.expander(f"📦 {product_title} ({len(variants)} variants)", expanded=len(products_variants) <= 3):
-                cols = st.columns(min(3, len(variants)))
-                for idx, (size, color) in enumerate(variants):
-                    with cols[idx % 3]:
-                        st.markdown(f'<div class="variant-card">', unsafe_allow_html=True)
-                        key = f"qty_{size}_{color}_{product_title}"
-                        qty = st.number_input(
-                            f"**Size:** {size}\n**Color:** {color}",
-                            min_value=0, 
-                            value=default_qty, 
-                            step=1, 
-                            key=key,
-                            help=f"Set quantity for {size} - {color}"
-                        )
-                        variant_qty_map[(size, color)] = qty
-                        st.markdown('</div>', unsafe_allow_html=True)
+            with st.expander(f"📦 {product_title} ({len(variants)} variants)", expanded=len(products_variants) <= 2):
+                
+                # Use form for batch updates per product
+                with st.form(key=f"form_{hash(product_title) % 10000}"):
+                    # Use columns for better layout
+                    num_cols = min(4, len(variants))  # More columns for faster input
+                    if num_cols > 0:
+                        cols = st.columns(num_cols)
+                        
+                        variant_inputs = {}
+                        for idx, (size, color) in enumerate(variants):
+                            with cols[idx % num_cols]:
+                                variant_key = f"{size}|{color}|{product_title}"
+                                current_qty = st.session_state.variant_quantities.get(variant_key, default_qty)
+                                
+                                # Simpler display, faster input
+                                qty = st.number_input(
+                                    f"{size} / {color}",
+                                    min_value=0, 
+                                    value=int(current_qty), 
+                                    step=1, 
+                                    key=f"form_qty_{variant_key}_{hash(variant_key) % 10000}"
+                                )
+                                variant_inputs[variant_key] = qty
+                    
+                    # Submit button for this product
+                    if st.form_submit_button(f"Update {product_title}", use_container_width=True):
+                        # Batch update all variants for this product
+                        for variant_key, qty in variant_inputs.items():
+                            st.session_state.variant_quantities[variant_key] = qty
+                        st.success(f"✅ Updated quantities for {product_title}")
+        
+        # Alternative: Fast table-based input for power users
+        with st.expander("⚡ Power User: Table Input Mode", expanded=False):
+            st.markdown("*Copy/paste friendly bulk editing*")
+            
+            # Create a dataframe for editing
+            variant_data = []
+            for size, color, title in unique_variants:
+                variant_key = f"{size}|{color}|{title}"
+                variant_data.append({
+                    'Product': title,
+                    'Size': size if size else 'N/A',
+                    'Color': color if color else 'N/A',
+                    'Quantity': st.session_state.variant_quantities.get(variant_key, default_qty),
+                    'Key': variant_key
+                })
+            
+            variant_df = pd.DataFrame(variant_data)
+            
+            # Use data editor for super fast editing
+            edited_variants = st.data_editor(
+                variant_df[['Product', 'Size', 'Color', 'Quantity']], 
+                hide_index=True,
+                use_container_width=True,
+                key="variant_editor"
+            )
+            
+            if st.button("Apply Table Changes", key="apply_table"):
+                for i, (variant_key, new_qty) in enumerate(zip(variant_df['Key'], edited_variants['Quantity'])):
+                    st.session_state.variant_quantities[variant_key] = int(new_qty)
+                st.success("✅ Applied all table changes!")
+                st.rerun()
 
-    # Apply quantities
-    df["Variant Inventory Qty"] = df.apply(
-        lambda row: variant_qty_map.get((str(row["sizes_list"]).strip(), str(row["colours_list"]).strip()), 0), 
-        axis=1
-    )
+    # Apply quantities to dataframe - much faster vectorized approach
+    variant_qty_map = st.session_state.variant_quantities
+    
+    # Create a fast lookup series
+    df["_variant_key"] = (df["sizes_list"].astype(str).str.strip() + "|" + 
+                          df["colours_list"].astype(str).str.strip() + "|" + 
+                          df["title"].astype(str).str.strip())
+    
+    df["Variant Inventory Qty"] = df["_variant_key"].map(variant_qty_map).fillna(0).astype(int)
 
-    # Generate handles and build final dataset
-    df["_base_handle"] = df["title"].str.strip().str.replace(r"\s+", "-", regex=True).str.lower()
-    serials = {h: str(idx+1).zfill(2) for idx, h in enumerate(df["_base_handle"].unique())}
-    df["_serial"] = df["_base_handle"].map(serials)
+    # Generate handles and build final dataset - optimized
+    df["_base_handle"] = (df["title"].astype(str).str.strip()
+                         .str.replace(r"[^\w\s-]", "", regex=True)  # Remove special chars
+                         .str.replace(r"\s+", "-", regex=True)      # Replace spaces
+                         .str.lower())
+    
+    # Create unique serials for each unique handle - vectorized
+    unique_handles = df["_base_handle"].unique()
+    handle_serial_map = {h: str(idx+1).zfill(2) for idx, h in enumerate(unique_handles)}
+    df["_serial"] = df["_base_handle"].map(handle_serial_map)
     df["Handle"] = df["_base_handle"] + "-" + df["_serial"]
 
-    # Build final Shopify dataset
+    # Build final Shopify dataset with better error handling
     out = pd.DataFrame({
         "Handle": df["Handle"],
         "Title": df["title"],
-        "Body (HTML)": "<p>" + df["custom_description"] + "</p>",
+        "Body (HTML)": "<p>" + df["custom_description"].astype(str) + "</p>",
         "Vendor": vendor_name,
-        "Product Category": df["product category"].fillna(""),
-        "Type": df["type"].fillna(""),
+        "Product Category": df.get("product category", pd.Series(dtype=str)).fillna(""),
+        "Type": df.get("type", pd.Series(dtype=str)).fillna(""),
         "Tags": df["ai_tags"],
-        "Published": df["published"].astype(str).str.lower().eq("active").map({True:"TRUE",False:"FALSE"}),
+        "Published": df.get("published", pd.Series(dtype=str)).astype(str).str.lower().eq("active").map({True:"TRUE",False:"FALSE"}),
         "Option1 Name": "Size",
         "Option1 Value": df["sizes_list"],
         "Option2 Name": "Color", 
         "Option2 Value": df["colours_list"],
-        "Variant SKU": df["product code"].fillna("") + "-" + df["_serial"] + "-" + df["sizes_list"] + "-" + df["colours_list"],
+        "Variant SKU": (df.get("product code", pd.Series(dtype=str)).fillna("").astype(str) + "-" + 
+                       df["_serial"].astype(str) + "-" + 
+                       df["sizes_list"].astype(str) + "-" + 
+                       df["colours_list"].astype(str)),
         "Variant Grams": 0,
-        "Variant Inventory Tracker": df.get("Variant Inventory Tracker", pd.Series("")).fillna(""),
+        "Variant Inventory Tracker": df.get("Variant Inventory Tracker", pd.Series(dtype=str)).fillna(""),
         "Variant Inventory Qty": df["Variant Inventory Qty"],
-        "Variant Inventory Policy": df.get("Variant Inventory Policy", pd.Series("")).fillna(""),
+        "Variant Inventory Policy": df.get("Variant Inventory Policy", pd.Series(dtype=str)).fillna(""),
         "Variant Fulfillment Service": "manual",
-        "Variant Price": df.get("Variant Price", pd.Series(0)).fillna(0),
-        "Variant Compare At Price": df.get("Variant Compare At Price", pd.Series(0)).fillna(0),
+        "Variant Price": pd.to_numeric(df.get("Variant Price", pd.Series(dtype=float)), errors='coerce').fillna(0),
+        "Variant Compare At Price": pd.to_numeric(df.get("Variant Compare At Price", pd.Series(dtype=float)), errors='coerce').fillna(0),
         "Variant Requires Shipping": "TRUE",
         "Variant Taxable": "TRUE",
-        "Status": df.get("Status", pd.Series("")).fillna("")
+        "Status": df.get("Status", pd.Series(dtype=str)).fillna("")
     })
 
     # ── 9) Results Display ──────────────────────────────────────────
@@ -365,7 +495,7 @@ if process_button:
     with col1:
         st.markdown('<div class="stats-box"><h3>{}</h3><p>Final Variants</p></div>'.format(len(out)), unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="stats-box"><h3>{}</h3><p>Total Inventory</p></div>'.format(out["Variant Inventory Qty"].sum()), unsafe_allow_html=True)
+        st.markdown('<div class="stats-box"><h3>{}</h3><p>Total Inventory</p></div>'.format(int(out["Variant Inventory Qty"].sum())), unsafe_allow_html=True)
     with col3:
         st.markdown('<div class="stats-box"><h3>{}</h3><p>Unique Products</p></div>'.format(out["Handle"].nunique()), unsafe_allow_html=True)
     with col4:
@@ -379,12 +509,16 @@ if process_button:
         st.dataframe(out.head(20), use_container_width=True)
     
     with tab2:
-        inventory_summary = out.groupby(["Handle", "Title"]).agg({
-            "Variant Inventory Qty": ["sum", "count"],
-            "Variant Price": "first"
-        }).round(2)
-        inventory_summary.columns = ["Total Qty", "Variants", "Price"]
-        st.dataframe(inventory_summary, use_container_width=True)
+        try:
+            inventory_summary = out.groupby(["Handle", "Title"]).agg({
+                "Variant Inventory Qty": ["sum", "count"],
+                "Variant Price": "first"
+            }).round(2)
+            inventory_summary.columns = ["Total Qty", "Variants", "Price"]
+            st.dataframe(inventory_summary, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error creating inventory summary: {e}")
+            st.dataframe(out[["Handle", "Title", "Variant Inventory Qty", "Variant Price"]], use_container_width=True)
     
     with tab3:
         if ai_enabled and mode != "Default template (no AI)":
@@ -409,6 +543,9 @@ if process_button:
     
     with col2:
         if st.button("🔄 Process Another File", use_container_width=True):
+            # Clear session state
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
 
     # Success message
