@@ -77,7 +77,7 @@ if not GEMINI_API_KEY:
     ai_enabled = False
 else:
     st.markdown('<div class="ai-status ai-enabled">✅ AI Features Enabled - Gemini 2.5 Flash Ready</div>', unsafe_allow_html=True)
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-pro')
     ai_enabled = True
 
 # ── 3) Enhanced Sidebar Configuration ──────────────────────────────────
