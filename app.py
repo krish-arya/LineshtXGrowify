@@ -7,7 +7,7 @@ from google import genai
 
 # ── 1) Init GenAI Client ──────────────────────────────────────────────────
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
 
 # ── 2) Enhanced UI Setup ─────────────────────────────────────────────
 st.set_page_config(
