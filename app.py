@@ -190,11 +190,12 @@ except Exception as e:
     st.error(f"❌ Could not load file: {e}")
     st.stop()
 
-# ── 6) AI Helper Functions ──────────────────────────────────────────
+# ── 2) AI Helper Functions ────────────────────────────────────────────
+
 def refine_and_tag(text: str) -> tuple[str, str]:
     if not ai_enabled:
         return text, ""
-    
+
     prompt = (
         "You are a top-tier Shopify copywriter.\n"
         "1) Rewrite this product description to be clear, engaging, and on-brand.\n"
@@ -204,18 +205,19 @@ def refine_and_tag(text: str) -> tuple[str, str]:
         "- Line 1: your rewritten description\n"
         "- Line 2: tag1,tag2,tag3,tag4,tag5"
     )
+
     try:
-        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        parts = (resp.text or "").strip().split("\n", 1)
+        response = model.generate_content(prompt)
+        parts = (response.text or "").strip().split("\n", 1)
         return parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
     except Exception as e:
-        st.warning(f"AI processing failed: {e}")
+        st.warning(f"⚠️ AI processing failed: {e}")
         return text, ""
 
 def tags_only(text: str) -> str:
     if not ai_enabled:
         return ""
-    
+
     prompt = (
         "You are an expert Shopify copywriter.\n"
         "Suggest exactly five comma-separated Shopify tags for this product description:\n\n"
@@ -223,11 +225,12 @@ def tags_only(text: str) -> str:
         "Respond with a single line:\n"
         "tag1,tag2,tag3,tag4,tag5"
     )
+
     try:
-        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        return (resp.text or "").strip()
+        response = model.generate_content(prompt)
+        return (response.text or "").strip()
     except Exception as e:
-        st.warning(f"AI tag generation failed: {e}")
+        st.warning(f"⚠️ AI tag generation failed: {e}")
         return ""
 
 # ── 7) Processing Section ──────────────────────────────────────────
